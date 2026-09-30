@@ -39,7 +39,7 @@ func TestTaskJSONRoundTrip(t *testing.T) {
 	if got.MaxAttempts != original.MaxAttempts {
 		t.Errorf("MaxAttempts: got %d, want %d", got.MaxAttempts, original.MaxAttempts)
 	}
-	
+
 	if !got.CreatedAt.Equal(original.CreatedAt) {
 		t.Errorf("CreatedAt: got %v, want %v", got.CreatedAt, original.CreatedAt)
 	}

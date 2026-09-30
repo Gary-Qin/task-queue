@@ -52,10 +52,6 @@ func NewTask(taskType string, payload any, maxAttempts int) (*Task, error) {
 	}, nil
 }
 
-func (t *Task) UnmarshalPayload(v any) error {
-	return json.Unmarshal(t.Payload, v)
-}
-
 type Handler func(ctx context.Context, payload json.RawMessage) error
 
 type Registry struct {
