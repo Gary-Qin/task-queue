@@ -16,32 +16,50 @@ type TestStruct struct {
 }
 
 func main() {
-	registry := task.NewTaskRegistry()
 	workerCount := 4
 	bufferSize := 20
-	queue := queue.New(registry, workerCount, bufferSize)
+	tr := task.NewTaskRegistry()
+	q := queue.New(tr, workerCount, bufferSize)
 
 	minMs := 500
 	maxMs := 2000
 	sleepHandler := func(ctx context.Context, payload json.RawMessage) error {
 		ms := minMs + rand.IntN(maxMs-minMs+1)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
-		fmt.Printf("%s\n", payload)
+		// fmt.Printf("%s\n", payload)
 		return nil
 	}
-	registry.Register("sleep", sleepHandler)
+	tr.Register("sleep", sleepHandler)
 
+	q.Start()
 	taskCount := 20
-	queue.Start()
+	tasksSubmitted := 0
 	for i := range taskCount {
 		t, err := task.NewTask("sleep", TestStruct{TaskNum: i + 1}, 5)
 		if err != nil {
 			log.Fatal(err)
 		}
-		err = queue.Submit(t)
+		err = q.Submit(t)
 		if err != nil {
 			fmt.Printf("%v\n", err)
+		} else {
+			tasksSubmitted++
 		}
 	}
-	queue.Stop()
+	for {
+		tasks := q.List()
+		statusMap := make(map[task.Status]int)
+		for _, t := range tasks {
+			statusMap[t.Status]++
+		}
+
+		fmt.Printf("pending: %v\trunning: %v\tsucceeded: %v\tfailed: %v\n", statusMap[task.StatusPending], statusMap[task.StatusRunning], statusMap[task.StatusSucceeded], statusMap[task.StatusFailed])
+
+		if statusMap[task.StatusSucceeded]+statusMap[task.StatusFailed] == tasksSubmitted {
+			break
+		}
+
+		time.Sleep(250 * time.Millisecond)
+	}
+	q.Stop()
 }
