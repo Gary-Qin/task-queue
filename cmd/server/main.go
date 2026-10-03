@@ -13,14 +13,14 @@ import (
 	"time"
 )
 
-type TestStruct struct {
+type sleepPayload struct {
 	TaskNum int `json:"taskNum"`
 }
 
 func taskSnapshot(q *queue.Queue) map[task.Status]int {
 	tasks := q.List()
 	statusMap := make(map[task.Status]int)
-	
+
 	for _, t := range tasks {
 		statusMap[t.Status]++
 	}
@@ -33,8 +33,8 @@ func taskSnapshot(q *queue.Queue) map[task.Status]int {
 func main() {
 	workerCount := 4
 	bufferSize := 20
-	tr := task.NewRegistry()
-	q := queue.New(tr, workerCount, bufferSize)
+	r := task.NewRegistry()
+	q := queue.New(r, workerCount, bufferSize)
 
 	minMs := 500
 	maxMs := 2000
@@ -42,13 +42,12 @@ func main() {
 		ms := minMs + rand.IntN(maxMs-minMs+1)
 		select {
 		case <-time.After(time.Duration(ms) * time.Millisecond):
-			// fmt.Printf("%s\n", payload)
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
-	tr.Register("sleep", sleepHandler)
+	r.Register("sleep", sleepHandler)
 
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -57,7 +56,7 @@ func main() {
 	taskCount := 20
 	tasksSubmitted := 0
 	for i := range taskCount {
-		t, err := task.NewTask("sleep", TestStruct{TaskNum: i + 1}, 5)
+		t, err := task.New("sleep", sleepPayload{TaskNum: i + 1}, 5)
 		if err != nil {
 			log.Fatal(err)
 		}

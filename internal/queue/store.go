@@ -37,7 +37,7 @@ func (s *store) Get(id string) (task.Task, bool) {
 
 	t, ok := s.tasks[id]
 	if ok {
-		return *t, ok
+		return *t, true
 	}
 	return task.Task{}, false
 }
@@ -54,10 +54,10 @@ func (s *store) Update(id string, modifier func(t *task.Task)) bool {
 }
 
 func (s *store) List() []task.Task {
-	tSlice := []task.Task{}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	tSlice := make([]task.Task, 0, len(s.tasks))
 	for _, t := range s.tasks {
 		tSlice = append(tSlice, *t)
 	}

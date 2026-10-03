@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
+var ErrUnknownType = errors.New("unknown handler type")
+
 type Status string
 
 const (
@@ -32,23 +34,22 @@ type Task struct {
 	DoneAt       *time.Time      `json:"doneAt,omitempty"`
 }
 
-func NewTask(taskType string, payload any, maxAttempts int) (*Task, error) {
+func New(taskType string, payload any, maxAttempts int) (*Task, error) {
 	if maxAttempts <= 0 {
 		return nil, errors.New("maxAttempts must be greater than 0")
 	}
-	jsonData, err := json.Marshal(payload)
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Task{
-		ID:           uuid.New().String(),
-		Type:         taskType,
-		Payload:      jsonData,
-		Status:       StatusPending,
-		AttemptCount: 0,
-		MaxAttempts:  maxAttempts,
-		CreatedAt:    time.Now(),
+		ID:          uuid.New().String(),
+		Type:        taskType,
+		Payload:     data,
+		Status:      StatusPending,
+		MaxAttempts: maxAttempts,
+		CreatedAt:   time.Now(),
 	}, nil
 }
 
@@ -64,14 +65,14 @@ func NewRegistry() *Registry {
 	}
 }
 
-func (tr *Registry) Register(name string, h Handler) {
-	tr.handlers[name] = h
+func (r *Registry) Register(name string, h Handler) {
+	r.handlers[name] = h
 }
 
-func (tr *Registry) Get(name string) (Handler, error) {
-	h, ok := tr.handlers[name]
+func (r *Registry) Get(name string) (Handler, error) {
+	h, ok := r.handlers[name]
 	if !ok {
-		return h, fmt.Errorf("task handler for %s does not exist in registry", name)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownType, name)
 	}
 	return h, nil
 }

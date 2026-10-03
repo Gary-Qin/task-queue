@@ -6,15 +6,15 @@ import (
 	"testing"
 )
 
-type TestStruct struct {
+type ProfilePayload struct {
 	Name string `json:"name"`
 	Age  int    `json:"age"`
 }
 
 func TestTaskJSONRoundTrip(t *testing.T) {
-	original, err := NewTask("test", TestStruct{Name: "Bob", Age: 20}, 3)
+	original, err := New("profile", ProfilePayload{Name: "Bob", Age: 20}, 3)
 	if err != nil {
-		t.Fatalf("NewTask: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 
 	data, err := json.Marshal(original)
