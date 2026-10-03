@@ -58,7 +58,7 @@ type Registry struct {
 	handlers map[string]Handler
 }
 
-func NewTaskRegistry() *Registry {
+func NewRegistry() *Registry {
 	return &Registry{
 		handlers: make(map[string]Handler),
 	}

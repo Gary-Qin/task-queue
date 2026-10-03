@@ -49,7 +49,7 @@ func TestTaskJSONRoundTrip(t *testing.T) {
 }
 
 func TestRegistryGet(t *testing.T) {
-	reg := NewTaskRegistry()
+	reg := NewRegistry()
 	called := false
 	reg.Register("print", func(ctx context.Context, payload json.RawMessage) error {
 		called = true
@@ -69,7 +69,7 @@ func TestRegistryGet(t *testing.T) {
 }
 
 func TestRegistryGetUnknown(t *testing.T) {
-	reg := NewTaskRegistry()
+	reg := NewRegistry()
 
 	h, err := reg.Get("nope")
 	if err == nil {

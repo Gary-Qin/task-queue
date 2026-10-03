@@ -2,6 +2,7 @@ package queue
 
 import (
 	"gqin/task-queue/internal/task"
+	"slices"
 	"sync"
 )
 
@@ -53,12 +54,15 @@ func (s *store) Update(id string, modifier func(t *task.Task)) bool {
 }
 
 func (s *store) List() []task.Task {
-	tArray := []task.Task{}
+	tSlice := []task.Task{}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for _, t := range s.tasks {
-		tArray = append(tArray, *t)
+		tSlice = append(tSlice, *t)
 	}
-	return tArray
+	slices.SortFunc(tSlice, func(a, b task.Task) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
+	})
+	return tSlice
 }
