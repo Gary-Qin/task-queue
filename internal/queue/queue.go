@@ -1,3 +1,4 @@
+// Package queue runs tasks on a pool of workers and tracks their status.
 package queue
 
 import (
@@ -9,11 +10,13 @@ import (
 	"time"
 )
 
+// Errors returned by Submit.
 var (
 	ErrQueueFull   = errors.New("queue is full")
 	ErrQueueClosed = errors.New("queue is closed")
 )
 
+// Queue is a buffered task queue processed by a fixed pool of workers.
 type Queue struct {
 	tasks       chan string
 	store       *store
@@ -25,6 +28,8 @@ type Queue struct {
 	closed      bool
 }
 
+// New returns a Queue that holds up to bufferSize waiting tasks and runs
+// workerCount of them at a time. Call Start to begin processing.
 func New(reg *task.Registry, workerCount, bufferSize int) *Queue {
 	return &Queue{
 		tasks:       make(chan string, bufferSize),
@@ -34,6 +39,8 @@ func New(reg *task.Registry, workerCount, bufferSize int) *Queue {
 	}
 }
 
+// Start launches the workers. Cancelling ctx cancels running handlers.
+// Call Start once.
 func (q *Queue) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	q.cancel = cancel
@@ -43,6 +50,8 @@ func (q *Queue) Start(ctx context.Context) {
 	}
 }
 
+// Submit enqueues a copy of t. It returns an error wrapping
+// task.ErrUnknownType, ErrQueueFull, or ErrQueueClosed.
 func (q *Queue) Submit(t *task.Task) error {
 	_, err := q.registry.Get(t.Type)
 	if err != nil {
@@ -67,6 +76,10 @@ func (q *Queue) Submit(t *task.Task) error {
 	}
 }
 
+// Shutdown stops accepting tasks and waits for queued ones to finish. If ctx
+// expires first, it cancels running handlers, marks the rest failed, and
+// returns ctx.Err() once all workers exit. Call Start first. Later calls
+// return nil immediately.
 func (q *Queue) Shutdown(ctx context.Context) error {
 	// must always call context cancel function
 	defer q.cancel()
@@ -98,10 +111,12 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 	}
 }
 
+// Get returns a copy of the task with the given id.
 func (q *Queue) Get(id string) (task.Task, bool) {
 	return q.store.Get(id)
 }
 
+// List returns copies of all tasks, oldest first.
 func (q *Queue) List() []task.Task {
 	return q.store.List()
 }
