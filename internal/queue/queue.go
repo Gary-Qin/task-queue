@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"gqin/task-queue/internal/task"
+	"math/rand/v2"
 	"sync"
 	"time"
 )
@@ -18,24 +19,51 @@ var (
 
 // Queue is a buffered task queue processed by a fixed pool of workers.
 type Queue struct {
-	tasks       chan string
-	store       *store
-	registry    *task.Registry
-	workerCount int
-	wg          sync.WaitGroup
-	cancel      context.CancelFunc
-	closedMu    sync.RWMutex
-	closed      bool
+	tasks    chan string
+	store    *store
+	registry *task.Registry
+	wg       sync.WaitGroup
+	cancel   context.CancelFunc
+	closedMu sync.RWMutex
+	closed   bool
+	cfg      Config
 }
 
-// New returns a Queue that holds up to bufferSize waiting tasks and runs
-// workerCount of them at a time. Call Start to begin processing.
-func New(reg *task.Registry, workerCount, bufferSize int) *Queue {
+type Config struct {
+	WorkerCount    int
+	BufferSize     int
+	RetryBaseDelay time.Duration
+	RetryMaxDelay  time.Duration
+}
+
+// New returns a Queue that holds up to Config.BufferSize waiting tasks and runs
+// Config.WorkerCount of them at a time. Call Start to begin processing.
+func New(reg *task.Registry, cfg Config) *Queue {
+	if cfg.WorkerCount <= 0 {
+		cfg.WorkerCount = 1
+	}
+
+	if cfg.BufferSize <= 0 {
+		cfg.BufferSize = 100
+	}
+
+	if cfg.RetryBaseDelay <= 0 {
+		cfg.RetryBaseDelay = 100 * time.Millisecond
+	}
+
+	if cfg.RetryMaxDelay <= 0 {
+		cfg.RetryMaxDelay = 10 * time.Second
+	}
+
+	if cfg.RetryMaxDelay < cfg.RetryBaseDelay {
+		cfg.RetryMaxDelay = cfg.RetryBaseDelay
+	}
+
 	return &Queue{
-		tasks:       make(chan string, bufferSize),
-		store:       newStore(),
-		registry:    reg,
-		workerCount: workerCount,
+		tasks:    make(chan string, cfg.BufferSize),
+		store:    newStore(),
+		registry: reg,
+		cfg:      cfg,
 	}
 }
 
@@ -45,7 +73,7 @@ func (q *Queue) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	q.cancel = cancel
 
-	for i := 1; i <= q.workerCount; i++ {
+	for i := 1; i <= q.cfg.WorkerCount; i++ {
 		q.worker(ctx, i)
 	}
 }
@@ -165,11 +193,56 @@ func (q *Queue) process(ctx context.Context, wID int, tID string) {
 
 	q.store.Update(t.ID, func(t *task.Task) {
 		t.StartedAt = new(time.Now())
-		t.Status = task.StatusRunning
-		t.AttemptCount++
 	})
 
-	err = handler(ctx, t.Payload)
+	// t is a copy, so track attempts locally and mirror them into the store.
+	attempt := t.AttemptCount
+	for {
+		attempt++
+		q.store.Update(t.ID, func(t *task.Task) {
+			t.Status = task.StatusRunning
+			t.AttemptCount = attempt
+		})
 
-	q.finish(t.ID, err)
+		err := handler(ctx, t.Payload)
+		if err == nil {
+			q.finish(t.ID, nil)
+			return
+		}
+		if ctx.Err() != nil {
+			q.finish(t.ID, ctx.Err())
+			return
+		}
+		if errors.Is(err, task.ErrPermanent) {
+			q.finish(t.ID, err)
+			return
+		}
+		if attempt >= t.MaxAttempts {
+			q.finish(t.ID, err)
+			return
+		}
+
+		q.store.Update(t.ID, func(t *task.Task) {
+			t.Status = task.StatusRetrying
+			t.Error = err.Error()
+		})
+
+		select {
+		case <-time.After(q.backoff(attempt)):
+		case <-ctx.Done():
+			q.finish(t.ID, ctx.Err())
+			return
+		}
+	}
+}
+
+// backoff returns the wait after the given failed attempt (1-based): the base
+// delay doubled per attempt, capped at the max, with full jitter.
+func (q *Queue) backoff(attempt int) time.Duration {
+	d := q.cfg.RetryBaseDelay
+	// Double by looping rather than shifting so large attempts can't overflow.
+	for i := 1; i < attempt && d < q.cfg.RetryMaxDelay; i++ {
+		d *= 2
+	}
+	return rand.N(min(d, q.cfg.RetryMaxDelay))
 }

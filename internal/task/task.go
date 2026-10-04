@@ -11,8 +11,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// ErrUnknownType is returned when no handler is registered for a task type.
-var ErrUnknownType = errors.New("unknown handler type")
+var (
+	// ErrPermanent is returned on a non-retryable error.
+	ErrPermanent = errors.New("permanent error")
+	// ErrUnknownType is returned when no handler is registered for a task type.
+	ErrUnknownType = errors.New("unknown handler type")
+)
 
 // Status is a task's position in its lifecycle:
 // pending → running → succeeded or failed.
@@ -22,6 +26,7 @@ type Status string
 const (
 	StatusPending   Status = "pending"
 	StatusRunning   Status = "running"
+	StatusRetrying  Status = "retrying"
 	StatusSucceeded Status = "succeeded"
 	StatusFailed    Status = "failed"
 )
@@ -61,8 +66,17 @@ func New(taskType string, payload any, maxAttempts int) (*Task, error) {
 	}, nil
 }
 
+func Permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", ErrPermanent, err)
+}
+
 // Handler runs one type of task. It should return promptly once ctx is
-// cancelled. A nil error means the task succeeded.
+// cancelled. A nil error means the task succeeded. A handler may be run
+// more than once due to retries, so it should be idempotent. For errors
+// that can't be fixed by retrying, handlers should return Permanent(err).
 type Handler func(ctx context.Context, payload json.RawMessage) error
 
 // Registry maps task types to handlers. It is not safe for concurrent use:
