@@ -29,11 +29,19 @@ type Queue struct {
 	cfg      Config
 }
 
+// Config configures a Queue. Zero fields use their defaults.
 type Config struct {
-	WorkerCount    int
-	BufferSize     int
+	// WorkerCount is how many tasks run at once. Defaults to 1.
+	WorkerCount int
+	// BufferSize is how many tasks can wait to run. Defaults to 100.
+	BufferSize int
+	// RetryBaseDelay is the delay before the first retry; it doubles on each
+	// later retry. Each wait is randomized between 0 and the current delay.
+	// Defaults to 100ms.
 	RetryBaseDelay time.Duration
-	RetryMaxDelay  time.Duration
+	// RetryMaxDelay caps the wait between retries. Defaults to 10s, and is
+	// raised to RetryBaseDelay if lower.
+	RetryMaxDelay time.Duration
 }
 
 // New returns a Queue that holds up to Config.BufferSize waiting tasks and runs

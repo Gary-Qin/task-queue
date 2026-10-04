@@ -12,14 +12,14 @@ import (
 )
 
 var (
-	// ErrPermanent is returned on a non-retryable error.
+	// ErrPermanent marks an error that retrying won't fix. See Permanent.
 	ErrPermanent = errors.New("permanent error")
 	// ErrUnknownType is returned when no handler is registered for a task type.
 	ErrUnknownType = errors.New("unknown handler type")
 )
 
 // Status is a task's position in its lifecycle:
-// pending → running → succeeded or failed.
+// pending → running (⇄ retrying) → succeeded or failed.
 type Status string
 
 // Task statuses.
@@ -66,6 +66,8 @@ func New(taskType string, payload any, maxAttempts int) (*Task, error) {
 	}, nil
 }
 
+// Permanent wraps err so the queue fails the task without retrying.
+// It returns nil if err is nil.
 func Permanent(err error) error {
 	if err == nil {
 		return nil
