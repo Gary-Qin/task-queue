@@ -189,6 +189,12 @@ internal/api/      HTTP handlers and request logging
 
 ## Design decisions
 
+### Backpressure: reject instead of block
+
+`Submit` sends to the buffered channel with a non-blocking `select`. If the buffer is full, the task is removed from the store and `Submit` returns `ErrQueueFull`, which the API turns into `503 Service Unavailable`.
+
+The alternative was to block until there's room. That would hold HTTP requests and their goroutines open for as long as the queue stays backed up, so a burst of traffic would turn into growing memory use and client timeouts. A `503` is a fast, clear answer: "busy, try again later," and clients and load balancers already know how to handle it. The cost is that clients have to retry when they're rejected, and the buffer size needs choosing based on the expected load.
+
 ### Retries: exponential backoff with full jitter, and permanent errors
 
 After a failed attempt, the worker waits a random time between 0 and `base × 2^(attempt−1)`, capped at `-retry-max-delay`. The doubling **slows retries down** when a dependency is struggling. The randomness (**jitter**) spreads out tasks that failed together, so they don't all retry at the same instant and overload a recovering service again (the "thundering herd" problem). The delay is doubled in a loop, not with a bit shift, so a large attempt number can't overflow into a negative or zero delay.
