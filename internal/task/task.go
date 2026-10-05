@@ -41,7 +41,7 @@ type Task struct {
 	Status       Status          `json:"status"`
 	AttemptCount int             `json:"attemptCount"`
 	MaxAttempts  int             `json:"maxAttempts"`
-	LastError        string          `json:"error,omitempty"`
+	LastError    string          `json:"error,omitempty"`
 	CreatedAt    time.Time       `json:"createdAt"`
 	StartedAt    *time.Time      `json:"startedAt,omitempty"`
 	DoneAt       *time.Time      `json:"doneAt,omitempty"`
