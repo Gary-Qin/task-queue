@@ -152,7 +152,7 @@ func (q *Queue) Get(id string) (task.Task, bool) {
 	return q.store.Get(id)
 }
 
-// List returns copies of all tasks, oldest first.
+// List returns copies of all tasks in submission order.
 func (q *Queue) List() []task.Task {
 	return q.store.List()
 }

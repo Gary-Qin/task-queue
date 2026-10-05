@@ -16,6 +16,8 @@ var (
 	ErrPermanent = errors.New("permanent error")
 	// ErrUnknownType is returned when no handler is registered for a task type.
 	ErrUnknownType = errors.New("unknown handler type")
+	// ErrInvalidMaxAttempts is returned by New when maxAttempts is less than 1.
+	ErrInvalidMaxAttempts = errors.New("maxAttempts must be greater than 0")
 )
 
 // Status is a task's position in its lifecycle:
@@ -49,7 +51,7 @@ type Task struct {
 // maxAttempts must be at least 1.
 func New(taskType string, payload any, maxAttempts int) (*Task, error) {
 	if maxAttempts <= 0 {
-		return nil, errors.New("maxAttempts must be greater than 0")
+		return nil, ErrInvalidMaxAttempts
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
