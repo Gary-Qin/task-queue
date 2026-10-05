@@ -19,8 +19,7 @@ An in-memory background task queue in Go. Clients submit jobs over HTTP and get 
 
 ```mermaid
 flowchart LR
-    client([Client]) -- "POST /tasks" --> api[HTTP API]
-    client -- "GET /tasks/{id}" --> api
+    client([Client]) -- "POST /tasks<br>GET /tasks/{id}" --> api[HTTP API]
     api -- Submit --> queue[Queue]
     api -- Get / List --> store[(Store)]
     queue -- "task ID" --> ch[[buffered channel]]
@@ -28,8 +27,12 @@ flowchart LR
     ch --> w1[Worker 1]
     ch --> w2[Worker 2]
     ch --> wn[Worker N]
-    w1 & w2 & wn -- look up --> registry[Handler registry]
-    w1 & w2 & wn -- update status --> store
+    w1 -- look up --> registry[Handler registry]
+    w2 --> registry
+    wn --> registry
+    w1 --> store
+    w2 --> store
+    wn -- update status --> store
 ```
 
 | Component      | Package          | Role                                                                                       |
@@ -47,8 +50,8 @@ stateDiagram-v2
     [*] --> pending: submitted
     pending --> running: a worker picks it up
     running --> succeeded: handler returns nil
-    running --> retrying: transient error, attempts left
-    retrying --> running: backoff elapsed
+    running --> retrying: transient error
+    retrying --> running
     running --> failed: permanent error / out of attempts / cancelled
     retrying --> failed: cancelled during backoff
     pending --> failed: cancelled before starting
