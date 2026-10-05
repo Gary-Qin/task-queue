@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"gqin/task-queue/internal/queue"
 	"gqin/task-queue/internal/task"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,8 +22,10 @@ func setup(t *testing.T, cfg queue.Config) (http.Handler, *queue.Queue) {
 	r.Register("noop", func(ctx context.Context, payload json.RawMessage) error {
 		return nil
 	})
+	logger := slog.New(slog.DiscardHandler)
+	cfg.Logger = logger
 	q := queue.New(r, cfg)
-	return NewHandler(q), q
+	return NewHandler(q, logger), q
 }
 
 // seedTask submits a task directly to q, bypassing the API, and returns its ID.

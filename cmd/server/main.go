@@ -2,120 +2,96 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
+	"flag"
 	"gqin/task-queue/internal/api"
 	"gqin/task-queue/internal/queue"
 	"gqin/task-queue/internal/task"
-	"math/rand/v2"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"text/tabwriter"
 	"time"
 )
 
-func taskSnapshot(q *queue.Queue) map[task.Status]int {
-	tasks := q.List()
-	statusMap := make(map[task.Status]int)
-
-	for _, t := range tasks {
-		statusMap[t.Status]++
-	}
-
-	fmt.Printf("pending %2d | running %2d | retrying %2d | succeeded %2d | failed %2d\n", statusMap[task.StatusPending], statusMap[task.StatusRunning], statusMap[task.StatusRetrying], statusMap[task.StatusSucceeded], statusMap[task.StatusFailed])
-
-	return statusMap
-}
-
 func main() {
-	r := task.NewRegistry()
-	q := queue.New(r, queue.Config{
-		WorkerCount:    4,
-		BufferSize:     20,
-		RetryBaseDelay: 100 * time.Millisecond,
-		RetryMaxDelay:  800 * time.Millisecond,
-	})
+	cfg, err := parseConfig(os.Args[1:], os.Stderr)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		os.Exit(2) // parseConfig has already printed the problem
+	}
 
-	sleepHandler := func(ctx context.Context, payload json.RawMessage) error {
-		minMs := 5000
-		maxMs := 20000
-		ms := minMs + rand.IntN(maxMs-minMs+1)
-		select {
-		case <-time.After(time.Duration(ms) * time.Millisecond):
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	flakyHandler := func(ctx context.Context, payload json.RawMessage) error {
-		minMs := 500
-		maxMs := 2000
-		ms := minMs + rand.IntN(maxMs-minMs+1)
-		select {
-		case <-time.After(time.Duration(ms) * time.Millisecond):
-			flip := rand.IntN(2)
-			if flip == 0 {
-				return errors.New("transient")
-			}
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	badHandler := func(ctx context.Context, payload json.RawMessage) error {
-		return task.Permanent(errors.New("bad"))
-	}
-	r.Register("sleep", sleepHandler)
-	r.Register("flaky", flakyHandler)
-	r.Register("bad", badHandler)
+	logger := newLogger(cfg)
+	slog.SetDefault(logger)
+
+	r := task.NewRegistry()
+	registerDemoHandlers(r)
+	q := queue.New(r, queue.Config{
+		WorkerCount:    cfg.workers,
+		BufferSize:     cfg.bufferSize,
+		RetryBaseDelay: cfg.retryBaseDelay,
+		RetryMaxDelay:  cfg.retryMaxDelay,
+		Logger:         logger,
+	})
 
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
 	q.Start(context.Background())
 
-	srv := &http.Server{Addr: ":8080", Handler: api.NewHandler(q), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{
+		Addr:              cfg.addr,
+		Handler:           api.NewHandler(q, logger),
+		ReadHeaderTimeout: 5 * time.Second,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
+	}
 	serverErr := make(chan error, 1)
 	go func() {
 		serverErr <- srv.ListenAndServe()
 	}()
-	fmt.Println("listening on", srv.Addr)
+	logger.Info("server listening", "addr", srv.Addr)
 
 	var serverFailed bool
 	select {
 	case <-signalCtx.Done():
 		stop()
-		fmt.Println("shutting down")
+		logger.Info("shutdown signal received", "timeout", cfg.shutdownTimeout)
 	case err := <-serverErr:
-		fmt.Println("server error:", err)
+		logger.Error("server failed", "err", err)
 		serverFailed = true
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.shutdownTimeout)
 	defer cancel()
 
 	if !serverFailed {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			fmt.Println("http shutdown:", err)
+			logger.Error("http shutdown", "err", err)
 		}
 	}
 	if err := q.Shutdown(shutdownCtx); err != nil {
-		fmt.Println("queue shutdown:", err)
+		logger.Error("queue shutdown", "err", err)
 	}
-
-	fmt.Println("--- Final Task Snapshot ---")
-	taskSnapshot(q)
-	fmt.Println("--- Tasks ---")
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "#\tTYPE\tSTATUS\tATTEMPTS\tERROR")
-	for i, t := range q.List() {
-		fmt.Fprintf(w, "%d\t%s\t%s\t%d\t%s\n", i+1, t.Type, t.Status, t.AttemptCount, t.Error)
-	}
-	w.Flush()
+	logSummary(logger, q)
 
 	if serverFailed {
 		os.Exit(1)
 	}
+}
+
+// logSummary logs how many tasks ended in each status.
+func logSummary(logger *slog.Logger, q *queue.Queue) {
+	counts := make(map[task.Status]int)
+	for _, t := range q.List() {
+		counts[t.Status]++
+	}
+	logger.Info("shutdown complete",
+		"succeeded", counts[task.StatusSucceeded],
+		"failed", counts[task.StatusFailed],
+		"pending", counts[task.StatusPending],
+		"running", counts[task.StatusRunning],
+		"retrying", counts[task.StatusRetrying],
+	)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,8 @@ import (
 )
 
 const testMaxAttempts = 5
+
+var discardLogger = slog.New(slog.DiscardHandler)
 
 // newTestQueue starts a single-worker queue with millisecond backoff that runs
 // h for tasks of type "test".
@@ -24,6 +27,7 @@ func newTestQueue(t *testing.T, h task.Handler) *Queue {
 		BufferSize:     10,
 		RetryBaseDelay: time.Millisecond,
 		RetryMaxDelay:  5 * time.Millisecond,
+		Logger:         discardLogger,
 	})
 	q.Start(context.Background())
 	return q
@@ -79,7 +83,7 @@ func TestRetry(t *testing.T) {
 				t.Fatal("task missing from store")
 			}
 			if got.Status != tt.wantStatus {
-				t.Errorf("Status: got %q, want %q (error: %q)", got.Status, tt.wantStatus, got.Error)
+				t.Errorf("Status: got %q, want %q (error: %q)", got.Status, tt.wantStatus, got.LastError)
 			}
 			if got.AttemptCount != tt.wantAttempts {
 				t.Errorf("AttemptCount: got %d, want %d", got.AttemptCount, tt.wantAttempts)
@@ -97,7 +101,7 @@ func TestShutdownInterruptsBackoff(t *testing.T) {
 		return errors.New("transient")
 	})
 	// A long backoff that the test would notice if Shutdown waited it out.
-	q := New(reg, Config{RetryBaseDelay: time.Hour, RetryMaxDelay: time.Hour})
+	q := New(reg, Config{RetryBaseDelay: time.Hour, RetryMaxDelay: time.Hour, Logger: discardLogger})
 	q.Start(context.Background())
 	id := submitTestTask(t, q)
 

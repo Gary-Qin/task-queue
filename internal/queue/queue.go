@@ -4,8 +4,8 @@ package queue
 import (
 	"context"
 	"errors"
-	"fmt"
 	"gqin/task-queue/internal/task"
+	"log/slog"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -27,6 +27,7 @@ type Queue struct {
 	closedMu sync.RWMutex
 	closed   bool
 	cfg      Config
+	logger   *slog.Logger
 }
 
 // Config configures a Queue. Zero fields use their defaults.
@@ -42,6 +43,8 @@ type Config struct {
 	// RetryMaxDelay caps the wait between retries. Defaults to 10s, and is
 	// raised to RetryBaseDelay if lower.
 	RetryMaxDelay time.Duration
+	// Logger receives the queue's logs. Defaults to slog.Default().
+	Logger *slog.Logger
 }
 
 // New returns a Queue that holds up to Config.BufferSize waiting tasks and runs
@@ -67,11 +70,16 @@ func New(reg *task.Registry, cfg Config) *Queue {
 		cfg.RetryMaxDelay = cfg.RetryBaseDelay
 	}
 
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+
 	return &Queue{
 		tasks:    make(chan string, cfg.BufferSize),
 		store:    newStore(),
 		registry: reg,
 		cfg:      cfg,
+		logger:   cfg.Logger,
 	}
 }
 
@@ -84,6 +92,7 @@ func (q *Queue) Start(ctx context.Context) {
 	for i := 1; i <= q.cfg.WorkerCount; i++ {
 		q.worker(ctx, i)
 	}
+	q.logger.Info("queue started", "workers", q.cfg.WorkerCount, "buffer_size", q.cfg.BufferSize)
 }
 
 // Submit enqueues a copy of t. It returns an error wrapping
@@ -105,9 +114,11 @@ func (q *Queue) Submit(t *task.Task) error {
 
 	select {
 	case q.tasks <- t.ID:
+		q.logger.Debug("task submitted", "task_id", t.ID, "task_type", t.Type)
 		return nil
 	default:
 		q.store.Delete(t.ID)
+		q.logger.Warn("queue full, task rejected", "task_id", t.ID, "task_type", t.Type)
 		return ErrQueueFull
 	}
 }
@@ -129,6 +140,7 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 	q.closed = true
 	close(q.tasks)
 	q.closedMu.Unlock()
+	q.logger.Info("queue shutting down, draining tasks")
 
 	done := make(chan struct{})
 	go func() {
@@ -138,11 +150,14 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		q.logger.Warn("shutdown deadline exceeded, cancelling running tasks")
 		// explicit cancel function call to signal to running handlers to stop
 		q.cancel()
 		<-done
+		q.logger.Info("queue stopped")
 		return ctx.Err()
 	case <-done:
+		q.logger.Info("queue stopped")
 		return nil
 	}
 }
@@ -158,9 +173,10 @@ func (q *Queue) List() []task.Task {
 }
 
 func (q *Queue) worker(ctx context.Context, wID int) {
+	logger := q.logger.With("worker", wID)
 	q.wg.Go(func() {
 		for tID := range q.tasks {
-			q.process(ctx, wID, tID)
+			q.process(ctx, logger, tID)
 		}
 	})
 }
@@ -170,32 +186,33 @@ func (q *Queue) finish(id string, err error) {
 		t.DoneAt = new(time.Now())
 		if err != nil {
 			t.Status = task.StatusFailed
-			t.Error = err.Error()
+			t.LastError = err.Error()
 		} else {
 			t.Status = task.StatusSucceeded
-			t.Error = ""
+			t.LastError = ""
 		}
 	})
 }
 
-func (q *Queue) process(ctx context.Context, wID int, tID string) {
+func (q *Queue) process(ctx context.Context, logger *slog.Logger, tID string) {
 	t, ok := q.store.Get(tID)
 	if !ok {
-		fmt.Printf("worker <%d>: error -> task <%s> does not exist in store\n", wID, tID)
+		logger.Error("task not found in store", "task_id", tID)
 		return
 	}
+	logger = logger.With("task_id", t.ID, "task_type", t.Type)
 
 	// if cancel triggered, drain channel
 	if ctx.Err() != nil {
 		q.finish(t.ID, ctx.Err())
-		fmt.Printf("worker <%d>: error -> %v\n", wID, ctx.Err())
+		logger.Warn("task cancelled before starting", "err", ctx.Err())
 		return
 	}
 
 	handler, err := q.registry.Get(t.Type)
 	if err != nil {
 		q.finish(t.ID, err)
-		fmt.Printf("worker <%d>: error -> %v\n", wID, err)
+		logger.Error("task failed", "err", err)
 		return
 	}
 
@@ -212,33 +229,44 @@ func (q *Queue) process(ctx context.Context, wID int, tID string) {
 			t.AttemptCount = attempt
 		})
 
+		logger.Debug("attempt started", "attempt", attempt, "max_attempts", t.MaxAttempts)
+
 		err := handler(ctx, t.Payload)
 		if err == nil {
 			q.finish(t.ID, nil)
+			logger.Info("task succeeded", "attempt", attempt)
 			return
 		}
 		if ctx.Err() != nil {
 			q.finish(t.ID, ctx.Err())
+			logger.Warn("task cancelled", "attempt", attempt, "err", err)
 			return
 		}
 		if errors.Is(err, task.ErrPermanent) {
 			q.finish(t.ID, err)
+			logger.Error("task failed with permanent error", "attempt", attempt, "err", err)
 			return
 		}
 		if attempt >= t.MaxAttempts {
 			q.finish(t.ID, err)
+			logger.Error("task failed after max attempts", "attempt", attempt, "err", err)
 			return
 		}
 
 		q.store.Update(t.ID, func(t *task.Task) {
 			t.Status = task.StatusRetrying
-			t.Error = err.Error()
+			t.LastError = err.Error()
 		})
 
+		wait := q.backoff(attempt)
+		logger.Warn("attempt failed, retrying",
+			"attempt", attempt, "max_attempts", t.MaxAttempts, "backoff", wait, "err", err)
+
 		select {
-		case <-time.After(q.backoff(attempt)):
+		case <-time.After(wait):
 		case <-ctx.Done():
 			q.finish(t.ID, ctx.Err())
+			logger.Warn("task cancelled during backoff", "attempt", attempt, "err", ctx.Err())
 			return
 		}
 	}
